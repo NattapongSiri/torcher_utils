@@ -1,0 +1,9 @@
+[package]
+name = "torcher_utils"
+version = "0.1.0"
+authors = ["Nattapong Sirilappanich <s.nattapong@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rand = "0.6"
+torcher = { git = "https://github.com/NattapongSiri/torcher.git" }
