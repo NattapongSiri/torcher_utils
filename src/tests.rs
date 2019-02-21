@@ -61,3 +61,21 @@ fn unfold_tensor() {
         }
     }
 }
+
+#[test]
+fn transpose_tensor() {
+    let mut tensor = populate_tensor!(f32, 10, |(i, v)| *v = i as f32);
+    tensor.resize_nd(&[5, 2], &[2]);
+    let ts = IndicedTensor::from(tensor);
+    let tp_ts = ts.transpose(0, 1).unwrap().as_tensor();
+    let expected_shape : &[usize] = &[2, 5];
+    let expected_stride: &[usize] = &[1, 2];
+    assert_eq!((expected_shape, expected_stride), tp_ts.1.shape());
+    let expected_value: &[f32] = &[0f32, 2.0, 4.0, 6.0, 8.0, 1.0, 3.0, 5.0, 7.0, 9.0];
+    /*
+     * [[0, 1],[2, 3],[4, 5],[6, 7],[8, 9]]
+     */
+    tp_ts.1.iter().enumerate().for_each(|(i, v)| {
+        assert_eq!(v, expected_value[i]);
+    });
+}
