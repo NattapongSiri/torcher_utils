@@ -244,38 +244,50 @@ impl<T> TensorIterator<T>
 where for<'a> T: Index<&'a [usize], Output=<T as Tensor>::Datum> + Tensor,
       <T as Tensor>::Datum: Copy
 {
-    fn new(batch_size: usize, drop_last: bool, tensor: IndicedTensor<T>) -> TensorIterator<T> {
+    fn new(batch_size: usize, drop_last: bool, mut tensor: IndicedTensor<T>) -> TensorIterator<T> {
         let mut shape = tensor.tensor.shape().0.to_owned();
-        // add batch size to first index of shape
+        /*
+         * calculate number of batch
+         * new_size = (size - batch_size) / batch_size + 1
+         * new_size = size / batch_size -1 +1
+         * size / new_size = batch_size
+         */
+        let actual_batch_size = shape[0] / batch_size;
+        
+        // reshape tensor into batched tensor based on previous calculation
+        // the shape may be different for last tensor if drop_last is false
+        let org_size = shape.remove(0); 
         shape.insert(0, batch_size);
-        let mut stride = Vec::with_capacity(shape.len());
 
-        shape.iter().fold(1, |cum, s| {
-            stride.push(cum);
-            cum * s
-        }); // stride ignore last cum * s
-
-        if tensor.compat {
+        // compat & (% | drop)
+        if tensor.compat && org_size % batch_size == 0 {
             // batch dim is now on last dim
-            let mut batch = tensor.unfold(0, batch_size, batch_size).unwrap();
-
-            // keep transpose batch dim until it is first dim without
-            // changing other dim order
-            for i in (1..shape.len()).rev() {
-                batch = batch.transpose(i, i - 1).unwrap();
-            }
-
+            let mut overall_shape = vec![actual_batch_size];
+            shape.iter().for_each(|s| overall_shape.push(*s));
+            let mut overall_stride = vec![batch_size * tensor.tensor.stride(0)];
+            tensor.tensor.shape().1.iter().for_each(|s| overall_stride.push(*s));
+            tensor.tensor.resize_nd(&overall_shape, &overall_stride[..(overall_stride.len() - 1)]);
+            
             TensorIterator {
                 batch_numel: shape.iter().product(),
                 current: 0,
-                shape: shape,
-                stride: stride,
+                shape: overall_shape,
+                stride: overall_stride,
 
                 batch_size: batch_size,
                 drop_last: drop_last,
-                tensor: TensorIteratorSrc::Compat(batch)
+                tensor: TensorIteratorSrc::Compat(tensor)
             }
         } else {
+            let mut stride = Vec::with_capacity(shape.len());
+
+            shape.iter().rev().fold(1, |cum, s| {
+                stride.push(cum);
+                cum * s
+            }); // stride ignore last cum * s
+
+            stride.reverse();
+
             TensorIterator {
                 batch_numel: shape.iter().product(),
                 current: 0,
@@ -319,50 +331,47 @@ where for<'a> T: Index<&'a [usize], Output=<T as Tensor>::Datum> + Tensor,
                     None
                 } else {
                     unsafe {
-                        let result = tensor.tensor.new_narrow(0, self.current, self.batch_size);
-                        self.current += self.batch_size;
-
+                        let result = tensor.tensor.new_narrow(0, self.current, 1).unsafe_squeeze_dim(0);
+                        self.current += 1;
+                        dbg!(result.data().len());
                         Some(result)
                     }
                 }
             },
             TensorIteratorSrc::Incompat(tensor) => {
-                for i in 0..self.batch_size {
-                    // filling batch
-                    for j in 0..self.batch_numel {
-                        // filling each of batch with data
-                        match tensor.next() {
-                            // more data available, copy to batch
-                            Some(d) => data[i * self.batch_numel + j] = d,
+                for i in 0..self.batch_numel {
+                    // filling each of batch with data
+                    match tensor.next() {
+                        // more data available, copy to batch
+                        Some(d) => data[i] = d,
 
-                            // no more data available but batch is yet to be fill
-                            None => {
-                                if self.drop_last {
-                                    // drop_last so ignore this last batch
-                                    return None
-                                } else if i > 0 {
-                                    // i > 0 mean there's at least a batch succeed.
-                                    // Return as is.
-                                    // since all tensors have same shape.
-                                    // Each tensor in batch shall be complete.
-                                    // Only batch that's not fulfill
-                                    
-                                    // resize shape according to batching progress.
-                                    self.shape.remove(0);
-                                    self.shape.insert(0, i + 1);
-                                    batch.resize_nd(&self.shape, &self.stride);
-                                    return Some(batch);
-                                } else {
-                                    // no more batch available
-                                    return None
-                                }
+                        // no more data available but batch is yet to be fill
+                        None => {
+                            if self.drop_last {
+                                // drop_last so ignore this last batch
+                                return None
+                            } else if i > 0 {
+                                // i > 0 mean there's at least a batch succeed.
+                                // Return as is.
+                                // since all tensors have same shape.
+                                // Each tensor in batch shall be complete.
+                                // Only batch that's not fulfill
+                                
+                                // resize shape according to batching progress.
+                                self.shape.remove(0);
+                                self.shape.insert(0, i % self.batch_size + 1);
+                                batch.resize_nd(&self.shape, &self.stride[..(self.stride.len() - 1)]);
+                                return Some(batch);
+                            } else {
+                                // no more batch available
+                                return None
                             }
                         }
                     }
                 }
                 
                 // resize batch according to pre-calculated shape/stride
-                batch.resize_nd(&self.shape, &self.stride);
+                batch.resize_nd(&self.shape, &self.stride[..(self.stride.len() - 1)]);
 
                 Some(batch)
             }
@@ -560,7 +569,7 @@ where for<'a> T: Index<&'a [usize], Output=<T as Tensor>::Datum> + Tensor,
 
                     make_tensor(false, self, unfolded).shuffle(i)
                 },
-                Err(_) => Ok(make_tensor(true, self, unfolded))
+                Err(_) => Ok(make_tensor(self.compat, self, unfolded))
             }
 
         }

@@ -79,3 +79,63 @@ fn transpose_tensor() {
         assert_eq!(v, expected_value[i]);
     });
 }
+
+#[test]
+fn as_batch_incompat() {
+    let tensor = populate_tensor!(f32, 20, |(i, v)| *v = i as f32);
+    let ts = IndicedTensor::from(tensor);
+    let batch = ts.unfold(0, 2, 1).unwrap().as_batch(5, false);
+    let expected : Vec<[f32; 2]> = (0..19).map(|v| [v as f32, (v + 1) as f32]).collect();
+    let mut i = 0;
+    let mut j = 0;
+    let mut batch_num = 0;
+    batch.for_each(|b| {
+        batch_num += 1;
+        b.iter().for_each(|v| {
+            assert_eq!(v, expected[i][j]);
+            j += 1;
+
+            if j == 2 {
+                i += 1;
+                j = 0;
+            }
+        });
+    });
+
+    assert_eq!(batch_num, 4);
+}
+
+#[test]
+fn as_batch_compat() {
+    let tensor = populate_tensor!(f32, 16, |(i, v)| *v = i as f32);
+    let ts = IndicedTensor::from(tensor);
+    /*
+     * shape = [3, 5, 2]
+     * 5 * 3 = 15
+     * (x - 2) / 1 + 1 = 15
+     * x - 2 + 1 = 15
+     * x = 16 
+     */
+    let batch = ts.unfold(0, 2, 1).unwrap().as_batch(5, false);
+    let expected : Vec<[f32; 2]> = (0..15).map(|v| [v as f32, (v + 1) as f32]).collect();
+    let mut i = 0;
+    let mut j = 0;
+    let mut batch_num = 1;
+    let expected_shape : &[usize] = &[5, 2];
+    let expected_stride: &[usize] = &[1, 1];
+    batch.for_each(|b| {
+        assert_eq!(b.shape(), (expected_shape, expected_stride));
+        batch_num += 1;
+        b.iter().for_each(|v| {
+            assert_eq!(v, expected[i][j]);
+            j += 1;
+
+            if j == 2 {
+                i += 1;
+                j = 0;
+            }
+        });
+    });
+
+    assert_eq!(batch_num, 4);
+}
